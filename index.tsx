@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
 import PizZip from "pizzip";
@@ -16,7 +16,8 @@ import {
   Settings, 
   Layers, 
   Globe,
-  Sparkles
+  Sparkles,
+  Key
 } from 'lucide-react';
 
 const saveAs = (FileSaverModule as any).saveAs || (FileSaverModule as any).default || FileSaverModule;
@@ -26,17 +27,14 @@ const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const NLS_MAPPING_RULES = `
 BẠN LÀ TRỢ LÝ AI CHUYÊN BỔ SUNG NĂNG LỰC SỐ (NLS) CHO GIÁO ÁN BỘ SÁCH "KẾT NỐI TRI THỨC VỚI CUỘC SỐNG", "GLOBAL SUCCESS" VÀ TẤT CẢ CÁC BỘ SÁCH GIÁO KHOA KHÁC.
 
-QUY TẮC NGÔN NGỮ QUAN TRỌNG:
-- KIỂM TRA NỘI DUNG GIÁO ÁN: Nếu giáo án có tiêu đề, nội dung hoặc các phần bằng Tiếng Anh (Ví dụ: Unit, Lesson, Objectives, Warm-up, Global Success...), BẮT BUỘC viết nội dung NLS bằng TIẾNG ANH.
-- Cấu trúc Tiếng Anh: "Digital Competence: [content] ([code], [criteria])".
-- Cấu trúc Tiếng Việt: "Năng lực số: [nội dung] ([mã nls], [mã tc])".
+QUY TẮC NGÔN NGỮ:
+- Nếu giáo án có Tiếng Anh (Unit, Lesson, Objectives...), viết NLS bằng TIẾNG ANH: "Digital Competence: [content] ([code], [criteria])".
+- Nếu giáo án Tiếng Việt, viết: "Năng lực số: [nội dung] ([mã nls], [mã tc])".
 
-QUY TẮC NỘI DUNG & ĐỊNH DẠNG:
-1. Mã NLS và TC ghi theo CV 3456/BGDĐT (NLS1, NLS2, TC1a...).
-2. KHÔNG SỬ DỤNG KÝ HIỆU ĐẦU DÒNG.
-3. QUY TẮC VIẾT HOA: Viết hoa chữ cái đầu dòng và ký hiệu mã số (NLS, TC, CV...).
-4. KHÔNG IN ĐẬM: Nội dung NLS phải là chữ thường (normal weight), không được in đậm.
-5. Vị trí: Chèn ngay dưới mục tiêu hoạt động hoặc phần năng lực phù hợp nhất.
+QUY TẮC ĐỊNH DẠNG:
+1. Mã NLS/TC theo CV 3456/BGDĐT.
+2. Không in đậm, không ký hiệu đầu dòng, viết hoa chữ cái đầu.
+3. Chèn ngay dưới mục tiêu hoạt động.
 `;
 
 interface NLSAddition {
@@ -78,14 +76,12 @@ const patchDocxWithNLS = async (file: File, additions: NLSAddition[]): Promise<B
         const content = e.target?.result as ArrayBuffer;
         const zip = new PizZip(content);
         const xml = zip.files["word/document.xml"].asText();
-        
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xml, "text/xml");
         const paragraphs = Array.from(xmlDoc.getElementsByTagName("w:p"));
 
         additions.forEach(add => {
           const targetPara = paragraphs.find(p => p.textContent?.trim().includes(add.searchText.trim()));
-          
           if (targetPara) {
             const newPara = xmlDoc.createElementNS(WORD_NS, "w:p");
             const targetPPr = targetPara.getElementsByTagName("w:pPr")[0];
@@ -110,25 +106,10 @@ const patchDocxWithNLS = async (file: File, additions: NLSAddition[]): Promise<B
               newRPr.appendChild(color);
             }
             color.setAttributeNS(WORD_NS, "w:val", "FF0000");
-
-            let b = (newRPr as Element).getElementsByTagName("w:b")[0];
-            if (!b) {
-              b = xmlDoc.createElementNS(WORD_NS, "w:b");
-              newRPr.appendChild(b);
-            }
-            b.setAttributeNS(WORD_NS, "w:val", "0");
-
-            let bCs = (newRPr as Element).getElementsByTagName("w:bCs")[0];
-            if (!bCs) {
-              bCs = xmlDoc.createElementNS(WORD_NS, "w:bCs");
-              newRPr.appendChild(bCs);
-            }
-            bCs.setAttributeNS(WORD_NS, "w:val", "0");
-
+            
             r.appendChild(newRPr);
             const t = xmlDoc.createElementNS(WORD_NS, "w:t");
             t.setAttribute("xml:space", "preserve");
-            // Thụt vào 1 tab so với dòng trên
             t.textContent = "\t" + add.nlsContent;
             r.appendChild(t);
             newPara.appendChild(r);
@@ -149,7 +130,7 @@ const patchDocxWithNLS = async (file: File, additions: NLSAddition[]): Promise<B
         reject(err);
       }
     };
-    reader.onerror = () => reject(new Error("Lỗi khi xử lý file Word."));
+    reader.onerror = () => reject(new Error("Lỗi khi xử lý file."));
     reader.readAsArrayBuffer(file);
   });
 };
@@ -161,7 +142,13 @@ const App = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Blob | null>(null);
+  const [customKey, setCustomKey] = useState(sessionStorage.getItem('GEMINI_KEY') || '');
+  const [showKeyInput, setShowKeyInput] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const getActiveApiKey = () => {
+    return customKey || process.env.API_KEY || (window as any).process?.env?.API_KEY;
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -174,15 +161,19 @@ const App = () => {
     }
   };
 
+  // Fix: Added missing downloadResults function
+  const downloadResults = () => {
+    if (result && file) {
+      const fileName = file.name.replace('.docx', '_NLS_TichHop.docx');
+      saveAs(result, fileName);
+    }
+  };
+
   const processLessonPlan = async () => {
-    if (!file) return;
-    
-    // Đảm bảo lấy API_KEY từ biến môi trường của hệ thống
-    const apiKey = (window as any).process?.env?.API_KEY || process.env.API_KEY;
-    
-    if (!apiKey || apiKey === "undefined" || apiKey.length < 10) {
-      setError("Thiếu API_KEY hoặc API_KEY không hợp lệ. Vui lòng kiểm tra cài đặt Environment Variables trên Vercel (Key: API_KEY).");
-      setStep(2);
+    const apiKey = getActiveApiKey();
+    if (!apiKey || apiKey.length < 10) {
+      setShowKeyInput(true);
+      setError("Vui lòng nhập API Key để tiếp tục.");
       return;
     }
 
@@ -191,23 +182,13 @@ const App = () => {
     setStep(3);
 
     try {
+      // Khởi tạo AI trực tiếp trước khi dùng theo chuẩn kỹ thuật
       const ai = new GoogleGenAI({ apiKey });
-      const docText = await extractTextFromDocx(file);
-
-      const prompt = `
-        BẠN LÀ CHUYÊN GIA GIÁO DỤC SỐ. 
-        NHIỆM VỤ: ${NLS_MAPPING_RULES}
-        Mức độ tích hợp yêu cầu: ${level}.
-        NỘI DUNG GIÁO ÁN CẦN PHÂN TÍCH (Chỉ phân tích nội dung chuyên môn để chèn NLS):
-        ---
-        ${docText.substring(0, 15000)}
-        ---
-        Trả về JSON với danh sách các câu/đoạn gốc cần chèn NLS ngay bên dưới.
-      `;
+      const docText = await extractTextFromDocx(file!);
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: prompt,
+        contents: `PHÂN TÍCH GIÁO ÁN VÀ BỔ SUNG NLS: ${NLS_MAPPING_RULES}\nMức độ: ${level}\nNội dung:\n${docText.substring(0, 15000)}`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -218,9 +199,8 @@ const App = () => {
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    searchText: { type: Type.STRING, description: "Câu gốc trong văn bản để tìm vị trí" },
-                    nlsContent: { type: Type.STRING, description: "Nội dung năng lực số cần chèn" },
-                    location: { type: Type.STRING }
+                    searchText: { type: Type.STRING },
+                    nlsContent: { type: Type.STRING }
                   },
                   required: ["searchText", "nlsContent"]
                 }
@@ -230,139 +210,140 @@ const App = () => {
         }
       });
 
-      const textOutput = response.text;
-      if (!textOutput) throw new Error("AI không trả về kết quả.");
+      const data = JSON.parse(response.text || '{}');
+      if (!data.additions || data.additions.length === 0) throw new Error("Không tìm thấy vị trí chèn phù hợp.");
       
-      const data = JSON.parse(textOutput);
-      if (!data.additions || data.additions.length === 0) throw new Error("AI không tìm thấy vị trí phù hợp trong giáo án.");
-      
-      const patchedDocx = await patchDocxWithNLS(file, data.additions);
+      const patchedDocx = await patchDocxWithNLS(file!, data.additions);
       setResult(patchedDocx);
     } catch (err: any) {
-      console.error("Lỗi xử lý:", err);
-      setError(`Lỗi: ${err.message || "Không xác định"}. Vui lòng thử lại hoặc kiểm tra API Key.`);
+      setError(err.message || "Lỗi kết nối AI.");
       setStep(2);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const downloadResults = () => {
-    if (result && file) saveAs(result, `NLS_TichHop_${file.name}`);
+  const saveKey = () => {
+    if (customKey.length > 10) {
+      sessionStorage.setItem('GEMINI_KEY', customKey);
+      setShowKeyInput(false);
+      setError(null);
+    }
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      <header className="gradient-bg text-white py-14 shadow-2xl px-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-white/10 rounded-full -mr-40 -mt-40 blur-3xl animate-pulse"></div>
-        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8 relative z-10">
-          <div className="flex items-center gap-6">
-            <div className="bg-white/15 p-5 rounded-[2rem] backdrop-blur-2xl border border-white/25 shadow-2xl">
-              <Sparkles size={42} className="text-yellow-300 animate-bounce" />
+      <header className="gradient-bg text-white py-10 shadow-2xl px-6 relative overflow-hidden">
+        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 relative z-10">
+          <div className="flex items-center gap-5">
+            <div className="bg-white/10 p-4 rounded-3xl backdrop-blur-xl border border-white/20">
+              <Sparkles size={32} className="text-yellow-300" />
             </div>
             <div>
-              <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tight text-white leading-tight">
-                GIÁO ÁN TÍCH HỢP <span className="text-yellow-300">NLS</span>
-              </h1>
-              <p className="text-blue-100 font-bold mt-2 flex items-center gap-2 text-lg">
-                Hệ thống AI tự động hóa bổ sung Năng lực số chuẩn 3456
-              </p>
+              <h1 className="text-2xl md:text-4xl font-black uppercase tracking-tight">GIÁO ÁN TÍCH HỢP <span className="text-yellow-300">NLS</span></h1>
+              <p className="text-blue-100 font-medium opacity-80">Trợ lý AI Năng lực số chuẩn 3456</p>
             </div>
           </div>
-          <div className="bg-white/10 px-8 py-4 rounded-3xl border border-white/20 flex flex-col items-end gap-1 backdrop-blur-xl">
-            <span className="text-xs font-black uppercase tracking-widest text-blue-200">Phát triển bởi</span>
-            <div className="flex items-center gap-3">
-              <ShieldCheck size={20} className="text-green-300" />
-              <span className="text-lg font-black tracking-tight">Đinh Thành: 0915.213717</span>
+          <div className="flex flex-col items-end">
+            <div className="bg-black/20 px-6 py-3 rounded-2xl border border-white/10 flex items-center gap-3">
+              <ShieldCheck size={18} className="text-green-300" />
+              <span className="text-sm font-bold">Đinh Thành: 0915.213717</span>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto w-full px-6 py-16 flex-grow">
-        <div className="flex items-center justify-center mb-16 max-w-lg mx-auto relative">
-          <div className="absolute top-1/2 left-0 w-full h-1.5 bg-slate-200 -z-10 -translate-y-1/2 rounded-full"></div>
-          <div className="absolute top-1/2 left-0 h-1.5 bg-blue-500 -z-10 -translate-y-1/2 rounded-full transition-all duration-700" style={{ width: `${(step - 1) * 50}%` }}></div>
-          {[1, 2, 3].map((s) => (
-            <div key={s} className={`w-14 h-14 rounded-2xl flex items-center justify-center font-black text-xl transition-all ${step >= s ? 'bg-blue-600 text-white shadow-xl scale-110' : 'bg-white text-slate-400 border-2 border-slate-200'}`}>
-              {s}
+      <main className="max-w-4xl mx-auto w-full px-6 py-12 flex-grow">
+        {showKeyInput && (
+          <div className="mb-10 bg-yellow-50 border-2 border-yellow-200 p-8 rounded-[2.5rem] shadow-xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-4 mb-6 text-yellow-800 font-black text-xl">
+              <Key size={28} /> CẤU HÌNH API KEY (DÀNH CHO VERCEL)
             </div>
+            <p className="text-yellow-700 mb-6 font-medium">Vì lý do bảo mật của Vercel, vui lòng dán API Key Gemini của bạn vào đây (Key sẽ được lưu tạm trong phiên làm việc này).</p>
+            <div className="flex gap-4">
+              <input 
+                type="password" 
+                value={customKey} 
+                onChange={(e) => setCustomKey(e.target.value)}
+                placeholder="Dán API Key tại đây..."
+                className="flex-grow bg-white border-2 border-yellow-300 px-6 py-4 rounded-2xl focus:outline-none focus:ring-4 ring-yellow-200 font-mono"
+              />
+              <button onClick={saveKey} className="bg-yellow-600 text-white px-8 py-4 rounded-2xl font-black hover:bg-yellow-700 transition-all">LƯU KEY</button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-center mb-12 max-w-xs mx-auto">
+          {[1, 2, 3].map((s) => (
+            <React.Fragment key={s}>
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black transition-all ${step >= s ? 'bg-blue-600 text-white shadow-lg' : 'bg-white text-slate-300 border-2 border-slate-100'}`}>{s}</div>
+              {s < 3 && <div className={`h-1 flex-grow mx-2 rounded-full ${step > s ? 'bg-blue-600' : 'bg-slate-200'}`}></div>}
+            </React.Fragment>
           ))}
         </div>
 
-        <div className="grid gap-10">
-          {step === 1 && (
-            <div onClick={() => fileInputRef.current?.click()} className="bg-white rounded-[3rem] p-16 md:p-24 border-4 border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer flex flex-col items-center group shadow-2xl relative">
-              <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".docx" />
-              <div className="bg-blue-600 p-12 rounded-full mb-10 group-hover:scale-110 transition-all shadow-2xl shadow-blue-500/30">
-                <FileUp size={64} className="text-white" />
-              </div>
-              <h3 className="text-4xl font-black text-slate-800 mb-6 text-center">Tải giáo án lên (.docx)</h3>
-              <p className="text-slate-500 text-center max-w-md font-semibold text-xl leading-relaxed">
-                Tự động chèn Năng lực số chuẩn CV 3456 vào mọi hoạt động dạy học.
-              </p>
-              {error && <div className="mt-8 text-red-600 font-bold bg-red-50 px-8 py-5 rounded-3xl border border-red-100 flex items-center gap-3"><AlertCircle size={24} /> {error}</div>}
+        {step === 1 && (
+          <div onClick={() => fileInputRef.current?.click()} className="bg-white rounded-[3rem] p-16 border-4 border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer flex flex-col items-center group shadow-xl">
+            <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".docx" />
+            <div className="bg-blue-600 p-10 rounded-full mb-8 group-hover:scale-110 transition-all shadow-xl shadow-blue-200">
+              <FileUp size={48} className="text-white" />
             </div>
-          )}
+            <h3 className="text-3xl font-black text-slate-800 mb-4">Tải giáo án .docx</h3>
+            <p className="text-slate-500 font-bold">Hệ thống sẽ tự động chèn NLS chuẩn 3456</p>
+            {error && <div className="mt-8 text-red-600 font-bold bg-red-50 px-6 py-4 rounded-2xl border border-red-100 flex items-center gap-2"><AlertCircle size={20} /> {error}</div>}
+          </div>
+        )}
 
-          {step === 2 && (
-            <div className="bg-white rounded-[3rem] p-12 shadow-2xl border border-slate-100 animate-in fade-in slide-in-from-bottom-5">
-              <div className="flex items-center gap-5 mb-12 pb-8 border-b border-slate-100">
-                <div className="p-4 bg-blue-50 rounded-2xl text-blue-600"><Settings size={36} /></div>
-                <h3 className="text-3xl font-black italic">Tùy chọn tích hợp AI</h3>
-              </div>
-              <div className="mb-14">
-                <label className="flex items-center gap-4 font-black text-slate-800 text-xl uppercase tracking-wider mb-8"><Layers size={26} className="text-blue-500" /> Mức độ NLS</label>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  {['Cơ bản', 'Chuẩn', 'Mở rộng'].map(l => (
-                    <button key={l} onClick={() => setLevel(l)} className={`py-8 px-6 rounded-[2rem] font-black text-xl transition-all border-2 ${level === l ? 'bg-blue-600 text-white border-blue-600 shadow-xl' : 'bg-slate-50 text-slate-500 border-transparent hover:bg-slate-100'}`}>{l}</button>
-                  ))}
-                </div>
-              </div>
-              {error && <div className="mb-8 text-red-600 font-bold bg-red-50 px-8 py-5 rounded-3xl border border-red-100 flex items-center gap-3"><AlertCircle size={24} /> {error}</div>}
-              <div className="flex flex-col md:flex-row items-center gap-8 justify-between pt-12 border-t border-slate-100">
-                <div className="flex items-center gap-5 p-6 bg-slate-50 rounded-3xl border border-slate-200 w-full md:w-auto">
-                   <FileText className="text-blue-500" />
-                   <span className="font-bold text-slate-700 truncate max-w-[200px] text-lg">{file?.name}</span>
-                   <button onClick={() => setStep(1)} className="text-blue-600 font-black hover:underline text-sm ml-4">ĐỔI FILE</button>
-                </div>
-                <button onClick={processLessonPlan} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-16 py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-5 shadow-2xl transition-all active:scale-95">XỬ LÝ NGAY <ChevronRight size={32} /></button>
-              </div>
+        {step === 2 && (
+          <div className="bg-white rounded-[3rem] p-10 shadow-xl border border-slate-100">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+              {['Cơ bản', 'Chuẩn', 'Mở rộng'].map(l => (
+                <button key={l} onClick={() => setLevel(l)} className={`py-6 px-4 rounded-2xl font-black text-lg transition-all border-2 ${level === l ? 'bg-blue-600 text-white border-blue-600 shadow-lg' : 'bg-slate-50 text-slate-400 border-transparent hover:bg-slate-100'}`}>{l}</button>
+              ))}
             </div>
-          )}
+            {error && <div className="mb-8 text-red-600 font-bold bg-red-50 px-6 py-4 rounded-2xl border border-red-100 flex items-center gap-2"><AlertCircle size={20} /> {error}</div>}
+            <div className="flex flex-col md:flex-row items-center gap-6 justify-between pt-8 border-t border-slate-50">
+              <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 w-full md:w-auto">
+                 <FileText className="text-blue-500" />
+                 <span className="font-bold truncate max-w-[150px]">{file?.name}</span>
+                 <button onClick={() => setStep(1)} className="text-blue-600 font-black text-sm ml-2 underline">ĐỔI</button>
+              </div>
+              <button onClick={processLessonPlan} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-12 py-6 rounded-2xl font-black text-xl flex items-center justify-center gap-4 shadow-xl active:scale-95 transition-all">BẮT ĐẦU XỬ LÝ <ChevronRight /></button>
+            </div>
+          </div>
+        )}
 
-          {step === 3 && (
-            <div className="bg-white rounded-[3.5rem] p-16 shadow-2xl border border-slate-100 flex flex-col items-center text-center">
-              {!result ? (
-                <>
-                  <div className="relative mb-16">
-                    <div className="relative bg-blue-50 p-16 rounded-full border-8 border-white shadow-2xl"><Loader2 size={100} className="text-blue-600 animate-spin" /></div>
-                  </div>
-                  <h3 className="text-4xl font-black text-slate-900 mb-8 italic animate-pulse-soft">AI đang làm việc...</h3>
-                  <div className="space-y-5 max-w-md w-full">
-                    <div className="flex items-center gap-5 p-5 bg-blue-50 rounded-3xl text-blue-700 font-bold text-lg"><Globe size={28} /> Quét nội dung giáo án</div>
-                    <div className="flex items-center gap-5 p-5 bg-green-50 rounded-3xl text-green-700 font-bold text-lg"><ShieldCheck size={28} /> Kiểm soát tiêu chuẩn 3456</div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="bg-green-100 p-14 rounded-full mb-12 shadow-inner border-8 border-white"><CheckCircle2 size={100} className="text-green-600" /></div>
-                  <h3 className="text-5xl font-black text-slate-900 mb-8 uppercase tracking-tighter">Thành công!</h3>
-                  <p className="text-slate-600 mb-14 max-w-xl mx-auto font-bold text-2xl italic">Giáo án đã được bổ sung Năng lực số, định dạng thụt lề chuẩn xác.</p>
-                  <div className="flex flex-col md:flex-row gap-8 w-full justify-center">
-                    <button onClick={downloadResults} className="bg-blue-600 hover:bg-blue-700 text-white px-16 py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-5 shadow-2xl active:scale-95 transition-all"><Download size={32} /> TẢI FILE (.DOCX)</button>
-                    <button onClick={() => { setFile(null); setResult(null); setStep(1); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-12 py-8 rounded-[2rem] font-black text-xl flex items-center justify-center gap-4 transition-all active:scale-95">FILE KHÁC</button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+        {step === 3 && (
+          <div className="bg-white rounded-[3.5rem] p-12 shadow-xl border border-slate-100 flex flex-col items-center text-center">
+            {!result ? (
+              <>
+                <div className="relative mb-10">
+                  <div className="bg-blue-50 p-12 rounded-full border-4 border-white shadow-lg"><Loader2 size={64} className="text-blue-600 animate-spin" /></div>
+                </div>
+                <h3 className="text-3xl font-black text-slate-900 mb-6 italic animate-pulse">AI đang phân tích và chèn NLS...</h3>
+                <div className="space-y-4 w-full max-w-xs">
+                  <div className="flex items-center gap-4 p-4 bg-blue-50 rounded-2xl text-blue-700 font-bold text-sm"><Globe size={20} /> Kiểm tra ngôn ngữ</div>
+                  <div className="flex items-center gap-4 p-4 bg-green-50 rounded-2xl text-green-700 font-bold text-sm"><ShieldCheck size={20} /> Áp dụng CV 3456</div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-green-100 p-10 rounded-full mb-8 shadow-inner border-4 border-white"><CheckCircle2 size={64} className="text-green-600" /></div>
+                <h3 className="text-4xl font-black text-slate-900 mb-4 uppercase">HOÀN TẤT!</h3>
+                <p className="text-slate-500 mb-10 font-bold text-xl italic">Giáo án của bạn đã sẵn sàng với NLS tích hợp.</p>
+                <div className="flex flex-col md:flex-row gap-6 w-full justify-center">
+                  <button onClick={downloadResults} className="bg-blue-600 hover:bg-blue-700 text-white px-12 py-6 rounded-2xl font-black text-xl flex items-center justify-center gap-4 shadow-xl active:scale-95 transition-all"><Download size={24} /> TẢI GIÁO ÁN MỚI</button>
+                  <button onClick={() => { setFile(null); setResult(null); setStep(1); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-8 py-6 rounded-2xl font-black text-lg transition-all">LÀM FILE KHÁC</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </main>
 
-      <footer className="py-20 bg-white border-t border-slate-200">
-        <div className="max-w-5xl mx-auto px-6 text-center text-slate-400 font-bold uppercase tracking-widest">
-          © 2024 AI Education Assistant - GIÁO ÁN TÍCH HỢP NLS
+      <footer className="py-12 bg-white border-t border-slate-200">
+        <div className="max-w-5xl mx-auto px-6 text-center text-slate-300 font-black uppercase tracking-widest text-sm">
+          AI Education Assistant - Digital Competence Integration
         </div>
       </footer>
     </div>
