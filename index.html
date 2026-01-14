@@ -17,8 +17,10 @@
         .animate-pulse-soft { animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
     <script>
-        // Quan trọng: Đảm bảo process.env tồn tại để tránh lỗi ReferenceError
-        // Khi deploy lên Vercel, các biến môi trường sẽ được inject qua quá trình build
+        // Cố gắng lấy API_KEY nếu trình duyệt hỗ trợ quá trình build-time injection của Vercel
+        // Lưu ý: Trên Vercel, biến môi trường chỉ có sẵn ở Edge/Serverless functions 
+        // trừ khi được cấu hình đặc biệt hoặc sử dụng NEXT_PUBLIC_ (đối với Next.js).
+        // Cho ứng dụng Vanilla JS/React này, chúng ta giả định biến môi trường được inject vào window.process
         window.process = window.process || {};
         window.process.env = window.process.env || {};
     </script>
