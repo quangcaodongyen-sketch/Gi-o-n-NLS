@@ -17,8 +17,10 @@
         .animate-pulse-soft { animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
     <script>
-        // Polyfill cho process.env để tránh lỗi runtime trên trình duyệt
-        window.process = { env: { NODE_ENV: 'production' } };
+        // Quan trọng: Đảm bảo process.env tồn tại để tránh lỗi ReferenceError
+        // Khi deploy lên Vercel, các biến môi trường sẽ được inject qua quá trình build
+        window.process = window.process || {};
+        window.process.env = window.process.env || {};
     </script>
 <script type="importmap">
 {

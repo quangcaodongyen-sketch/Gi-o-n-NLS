@@ -89,11 +89,9 @@ const patchDocxWithNLS = async (file: File, additions: NLSAddition[]): Promise<B
           if (targetPara) {
             const newPara = xmlDoc.createElementNS(WORD_NS, "w:p");
             const targetPPr = targetPara.getElementsByTagName("w:pPr")[0];
-            
             const newPPr = targetPPr ? targetPPr.cloneNode(true) : xmlDoc.createElementNS(WORD_NS, "w:pPr");
             const numPr = (newPPr as Element).getElementsByTagName("w:numPr")[0];
             if (numPr) { newPPr.removeChild(numPr); }
-            
             newPara.appendChild(newPPr);
 
             const r = xmlDoc.createElementNS(WORD_NS, "w:r");
@@ -178,12 +176,21 @@ const App = () => {
 
   const processLessonPlan = async () => {
     if (!file) return;
+    
+    // Kiểm tra API Key từ môi trường Vercel
+    const apiKey = process.env.API_KEY;
+    if (!apiKey || apiKey === "undefined") {
+      setError("Thiếu API_KEY. Vui lòng cấu hình Environment Variable trên Vercel.");
+      setStep(2);
+      return;
+    }
+
     setIsProcessing(true);
     setError(null);
     setStep(3);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const docText = await extractTextFromDocx(file);
 
       const prompt = `
@@ -228,7 +235,7 @@ const App = () => {
       const patchedDocx = await patchDocxWithNLS(file, data.additions);
       setResult(patchedDocx);
     } catch (err: any) {
-      setError(err.message || "Xử lý thất bại. Vui lòng thử lại.");
+      setError(err.message || "Xử lý thất bại. Vui lòng kiểm tra lại API Key hoặc kết nối mạng.");
       setStep(2);
     } finally {
       setIsProcessing(false);
@@ -285,7 +292,7 @@ const App = () => {
               <div className="bg-blue-600 p-12 rounded-full mb-10 group-hover:scale-110 transition-all shadow-2xl">
                 <FileUp size={64} className="text-white" />
               </div>
-              <h3 className="text-4xl font-black text-slate-800 mb-6">Tải giáo án lên (.docx)</h3>
+              <h3 className="text-4xl font-black text-slate-800 mb-6 text-center">Tải giáo án lên (.docx)</h3>
               <p className="text-slate-500 text-center max-w-md font-semibold text-xl leading-relaxed">
                 Hỗ trợ mọi môn học. Tự động chèn NLS chuẩn CV 3456.
               </p>
@@ -307,13 +314,14 @@ const App = () => {
                   ))}
                 </div>
               </div>
+              {error && <div className="mb-8 text-red-600 font-bold bg-red-50 px-8 py-5 rounded-3xl border border-red-100 flex items-center gap-3"><AlertCircle size={24} /> {error}</div>}
               <div className="flex flex-col md:flex-row items-center gap-8 justify-between pt-12 border-t border-slate-100">
                 <div className="flex items-center gap-5 p-6 bg-slate-50 rounded-3xl border border-slate-200 w-full md:w-auto">
                    <FileText className="text-blue-500" />
                    <span className="font-bold text-slate-700 truncate max-w-[200px]">{file?.name}</span>
                    <button onClick={() => setStep(1)} className="text-blue-600 font-black hover:underline text-sm ml-4">ĐỔI</button>
                 </div>
-                <button onClick={processLessonPlan} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-16 py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-5 shadow-2xl">XỬ LÝ NGAY <ChevronRight size={32} /></button>
+                <button onClick={processLessonPlan} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-16 py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-5 shadow-2xl transition-transform active:scale-95">XỬ LÝ NGAY <ChevronRight size={32} /></button>
               </div>
             </div>
           )}
@@ -337,8 +345,8 @@ const App = () => {
                   <h3 className="text-5xl font-black text-slate-900 mb-8 uppercase">Hoàn tất!</h3>
                   <p className="text-slate-600 mb-14 max-w-xl mx-auto font-bold text-2xl italic">Năng lực số đã được tích hợp chuẩn xác và thụt lề thẳng hàng.</p>
                   <div className="flex flex-col md:flex-row gap-8 w-full justify-center">
-                    <button onClick={downloadResults} className="bg-blue-600 hover:bg-blue-700 text-white px-16 py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-5 shadow-2xl"><Download size={32} /> TẢI FILE KẾT QUẢ</button>
-                    <button onClick={() => { setFile(null); setResult(null); setStep(1); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-12 py-8 rounded-[2rem] font-black text-xl flex items-center justify-center gap-4">XỬ LÝ FILE KHÁC</button>
+                    <button onClick={downloadResults} className="bg-blue-600 hover:bg-blue-700 text-white px-16 py-8 rounded-[2rem] font-black text-2xl flex items-center justify-center gap-5 shadow-2xl active:scale-95 transition-transform"><Download size={32} /> TẢI FILE KẾT QUẢ</button>
+                    <button onClick={() => { setFile(null); setResult(null); setStep(1); }} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-12 py-8 rounded-[2rem] font-black text-xl flex items-center justify-center gap-4 active:scale-95 transition-transform">XỬ LÝ FILE KHÁC</button>
                   </div>
                 </>
               )}
